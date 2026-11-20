@@ -3,7 +3,7 @@
 require 'json'
 
 module ShelfCalculator
-  VERSION = "1.0.0"
+  VERSION = "1.0.1"
   REMOTE_BASE_URL = "https://raw.githubusercontent.com/byurii94/shelf-calculator/main"
 
   def self.parse_float(val)
