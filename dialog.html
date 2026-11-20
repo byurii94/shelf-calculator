@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 14px;
+      color: #222;
+      background: #f8f9fa;
+      font-size: 13px;
+    }
+    .meta {
+      background: #eef3f8;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 12px;
+      line-height: 1.45;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 10px;
+    }
+    label {
+      font-weight: 500;
+    }
+    input[type="text"], input[type="number"] {
+      width: 110px;
+      padding: 5px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      text-align: right;
+    }
+    .gaps-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 12px 0 6px;
+      font-weight: 600;
+    }
+    .btn-link {
+      background: none;
+      border: none;
+      color: #0078d7;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 0;
+    }
+    .gap-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #fff;
+      border: 1px solid #e2e6ea;
+      border-radius: 5px;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+    .gap-row.locked {
+      border-color: #0078d7;
+      background: #f0f7ff;
+    }
+    .gap-label {
+      flex: 1;
+      font-size: 12px;
+    }
+    .lock-wrap {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #555;
+      cursor: pointer;
+    }
+    .error {
+      color: #c62828;
+      background: #ffebee;
+      border-radius: 5px;
+      padding: 7px 9px;
+      font-size: 12px;
+      margin-top: 8px;
+      display: none;
+    }
+    .actions {
+      margin-top: 14px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .btn-apply {
+      background: #0078d7;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-apply:hover {
+      background: #005fa3;
+    }
+  </style>
+</head>
+<body>
+  <div class="meta" id="metaBox">Завантаження...</div>
+
+  <div class="row">
+    <label for="numItems">Кількість (шт.):</label>
+    <input type="number" id="numItems" min="1" step="1" value="4" />
+  </div>
+
+  <div class="row">
+    <label for="thickness">Товщина (мм):</label>
+    <input type="text" id="thickness" value="18" />
+  </div>
+
+  <div class="gaps-header">
+    <span>Проміжки між елементами (мм):</span>
+    <button type="button" class="btn-link" id="resetGapsBtn">Рівномірно</button>
+  </div>
+
+  <div id="gapsContainer"></div>
+  <div class="error" id="errorBox"></div>
+
+  <div class="actions">
+    <button type="button" class="btn-apply" id="applyBtn">Застосувати</button>
+  </div>
+
+  <script>
+    let initialized = false;
+    let state = {
+      axis: "z",
+      axis_label: "",
+      axis_length: 0,
+      width: 0,
+      depth: 0,
+      height: 0,
+      thickness: 18,
+      num_items: 4,
+      gaps: [],
+      locked: []
+    };
+
+    function parseNum(v) {
+      if (typeof v === "number") return v;
+      const n = parseFloat(String(v || "").replace(",", ".").trim());
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function roundTenth(v) {
+      return Math.round(v * 10) / 10;
+    }
+
+    function initDialog(payload) {
+      initialized = true;
+      state.axis = payload.axis;
+      state.axis_label = payload.axis_label;
+      state.axis_length = parseNum(payload.axis_length);
+      state.width = parseNum(payload.width);
+      state.depth = parseNum(payload.depth);
+      state.height = parseNum(payload.height);
+      state.thickness = parseNum(payload.thickness) || 18;
+      state.num_items = Math.max(1, parseInt(payload.num_items, 10) || 4);
+      state.gaps = Array.isArray(payload.gaps) ? payload.gaps.map(parseNum) : [];
+      state.locked = new Array(state.gaps.length).fill(false);
+
+      document.getElementById("metaBox").innerHTML =
+        `<b>Вісь по ребру:</b> ${state.axis_label}<br>` +
+        `<b>Габарити ніші:</b> ${state.width} × ${state.depth} × ${state.height} мм (довжина по осі: <b>${state.axis_length} мм</b>)`;
+
+      document.getElementById("numItems").value = state.num_items;
+      document.getElementById("thickness").value = state.thickness;
+
+      resetAllEqual();
+      renderGaps();
+      validateState();
+      notifyRuby("update_params");
+    }
+
+    function distributeToIndices(indices, totalAmount) {
+      if (indices.length === 0) return;
+      if (indices.length === 1) {
+        state.gaps[indices[0]] = roundTenth(totalAmount);
+        return;
+      }
+
+      const baseEach = roundTenth(totalAmount / indices.length);
+      let assignedSum = 0;
+
+      for (let k = 0; k < indices.length - 1; k++) {
+        const idx = indices[k];
+        state.gaps[idx] = baseEach;
+        assignedSum += baseEach;
+      }
+
+      const lastIdx = indices[indices.length - 1];
+      state.gaps[lastIdx] = roundTenth(totalAmount - assignedSum);
+    }
+
+    function resetAllEqual() {
+      const n = state.num_items;
+      const numGaps = n + 1;
+      const free = state.axis_length - n * state.thickness;
+      state.gaps = new Array(numGaps).fill(0);
+      state.locked = new Array(numGaps).fill(false);
+
+      const allIndices = Array.from({ length: numGaps }, (_, i) => i);
+      distributeToIndices(allIndices, free);
+    }
+
+    function recalcUnlockedGaps() {
+      const n = state.num_items;
+      const numGaps = n + 1;
+      if (state.gaps.length !== numGaps) {
+        resetAllEqual();
+        return;
+      }
+
+      let lockedSum = 0;
+      const unlockedIndices = [];
+      for (let i = 0; i < numGaps; i++) {
+        if (state.locked[i]) {
+          const val = roundTenth(Math.max(0, parseNum(state.gaps[i])));
+          state.gaps[i] = val;
+          lockedSum += val;
+        } else {
+          unlockedIndices.push(i);
+        }
+      }
+
+      const remaining = state.axis_length - n * state.thickness - lockedSum;
+      distributeToIndices(unlockedIndices, remaining);
+    }
+
+    function validateState() {
+      const errEl = document.getElementById("errorBox");
+      if (state.num_items <= 0 || state.thickness <= 0) {
+        errEl.textContent = "Кількість і товщина мають бути більшими за 0.";
+        errEl.style.display = "block";
+        return false;
+      }
+      if (state.gaps.some(g => g < 0)) {
+        errEl.textContent = "Фіксовані проміжки перевищують доступний розмір ніші (є від'ємні проміжки).";
+        errEl.style.display = "block";
+        return false;
+      }
+      const totalUsed = state.num_items * state.thickness + state.gaps.reduce((a, b) => a + b, 0);
+      if (totalUsed > state.axis_length + 0.15) {
+        errEl.textContent = `Сума (${roundTenth(totalUsed)} мм) перевищує розмір по осі (${state.axis_length} мм).`;
+        errEl.style.display = "block";
+        return false;
+      }
+      errEl.style.display = "none";
+      return true;
+    }
+
+    function renderGaps() {
+      const container = document.getElementById("gapsContainer");
+      container.innerHTML = "";
+      const n = state.num_items;
+
+      for (let i = 0; i < n + 1; i++) {
+        let title = "";
+        if (i === 0) title = "Від початку до 1-го";
+        else if (i === n) title = `Від ${n}-го до кінця`;
+        else title = `Між ${i}-м і ${i + 1}-м`;
+
+        const row = document.createElement("div");
+        row.className = "gap-row" + (state.locked[i] ? " locked" : "");
+
+        const lbl = document.createElement("span");
+        lbl.className = "gap-label";
+        lbl.textContent = title;
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = String(state.gaps[i] ?? 0);
+
+        const lockLabel = document.createElement("label");
+        lockLabel.className = "lock-wrap";
+
+        const chk = document.createElement("input");
+        chk.type = "checkbox";
+        chk.checked = Boolean(state.locked[i]);
+
+        const lockText = document.createElement("span");
+        lockText.textContent = "Фікс";
+
+        input.addEventListener("change", () => {
+          state.gaps[i] = roundTenth(parseNum(input.value));
+          state.locked[i] = true;
+          recalcUnlockedGaps();
+          renderGaps();
+          validateState();
+          notifyRuby("update_params");
+        });
+
+        chk.addEventListener("change", () => {
+          state.locked[i] = chk.checked;
+          recalcUnlockedGaps();
+          renderGaps();
+          validateState();
+          notifyRuby("update_params");
+        });
+
+        lockLabel.appendChild(chk);
+        lockLabel.appendChild(lockText);
+
+        row.appendChild(lbl);
+        row.appendChild(input);
+        row.appendChild(lockLabel);
+        container.appendChild(row);
+      }
+    }
+
+    function notifyRuby(cbName) {
+      if (window.sketchup && window.sketchup[cbName]) {
+        window.sketchup[cbName](JSON.stringify({
+          thickness: state.thickness,
+          num_items: state.num_items,
+          gaps: state.gaps
+        }));
+      }
+    }
+
+    document.getElementById("numItems").addEventListener("change", (e) => {
+      state.num_items = Math.max(1, parseInt(e.target.value, 10) || 1);
+      e.target.value = state.num_items;
+      resetAllEqual();
+      renderGaps();
+      validateState();
+      notifyRuby("update_params");
+    });
+
+    document.getElementById("thickness").addEventListener("change", (e) => {
+      state.thickness = Math.max(0.1, roundTenth(parseNum(e.target.value)));
+      e.target.value = state.thickness;
+      recalcUnlockedGaps();
+      renderGaps();
+      validateState();
+      notifyRuby("update_params");
+    });
+
+    document.getElementById("resetGapsBtn").addEventListener("click", () => {
+      resetAllEqual();
+      renderGaps();
+      validateState();
+      notifyRuby("update_params");
+    });
+
+    document.getElementById("applyBtn").addEventListener("click", () => {
+      if (!validateState()) return;
+      notifyRuby("apply");
+    });
+
+    function signalReady() {
+      if (initialized) return;
+      if (window.sketchup && window.sketchup.ready) {
+        window.sketchup.ready();
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", signalReady);
+    window.addEventListener("load", signalReady);
+    setTimeout(signalReady, 150);
+  </script>
+</body>
+</html>
